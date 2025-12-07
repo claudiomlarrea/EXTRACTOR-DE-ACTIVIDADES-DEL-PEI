@@ -16,18 +16,20 @@ st.set_page_config(
 def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
     """
     Construye una tabla 'larga' con:
-    Año - Objetivo específico - Actividad relacionada
+    ID - Año - Objetivo específico - Actividad relacionada
     a partir de la plantilla normalizada (Objetivo 1..6, Actividad Obj 1..6).
     """
     filas = []
 
     for obj in range(1, 7):
+        col_id = clean_df["ID"]
         col_year = clean_df["Año"]
         col_obj = clean_df[f"Objetivo {obj}"]
         col_act = clean_df[f"Actividad Obj {obj}"]
 
         tmp = pd.DataFrame(
             {
+                "ID": col_id,
                 "Año": col_year,
                 "Objetivo específico": col_obj,
                 "Actividad relacionada": col_act,
@@ -44,7 +46,7 @@ def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
         resumen = pd.concat(filas, ignore_index=True)
     else:
         resumen = pd.DataFrame(
-            columns=["Año", "Objetivo específico", "Actividad relacionada"]
+            columns=["ID", "Año", "Objetivo específico", "Actividad relacionada"]
         )
 
     return resumen
@@ -53,14 +55,18 @@ def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
 def build_indicators(resumen_df: pd.DataFrame) -> pd.DataFrame:
     """
     Crea una tabla pequeña de indicadores globales:
-    - Cantidad total de actividades únicas
+    - Cantidad total de actividades únicas (por ID)
     - Consistencia general promedio (%)
     """
-    # Cantidad de actividades únicas (texto no vacío)
-    actividades = resumen_df["Actividad relacionada"].astype(str).str.strip()
-    total_actividades_unicas = actividades[actividades != ""].nunique()
+    # 1) Cantidad de actividades únicas por ID
+    if "ID" in resumen_df.columns:
+        total_actividades_unicas = resumen_df["ID"].nunique()
+    else:
+        # fallback por si faltara la columna (no debería suceder)
+        actividades = resumen_df["Actividad relacionada"].astype(str).str.strip()
+        total_actividades_unicas = actividades[actividades != ""].nunique()
 
-    # Promedio de consistencia general
+    # 2) Promedio de consistencia general
     if "Consistencia (%)" in resumen_df.columns:
         consistencia_general = resumen_df["Consistencia (%)"].mean()
     else:
@@ -136,13 +142,13 @@ clean_df = add_consistency_to_clean(clean_df)
 st.subheader("Hoja 1: PEI_normalizado + Consistencia por objetivo")
 st.dataframe(clean_df.head(), use_container_width=True)
 
-# 3) Construir hoja de RESUMEN (Año - Objetivo - Actividad)
+# 3) Construir hoja de RESUMEN (ID - Año - Objetivo - Actividad)
 resumen_df = build_resumen(clean_df)
 
 # 3.b) Agregar consistencia a la hoja Resumen
 resumen_df = add_consistency_to_resumen(resumen_df)
 
-st.subheader("Hoja 2: Resumen (Año - Objetivo - Actividad + Consistencia)")
+st.subheader("Hoja 2: Resumen (ID - Año - Objetivo - Actividad + Consistencia)")
 st.dataframe(resumen_df.head(), use_container_width=True)
 
 # 4) Construir hoja de INDICADORES
