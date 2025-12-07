@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+.env
+venv/
+.venv/
+
+# VSCode / JetBrains
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Archivos de datos
+*.xlsx
+*.xls
+*.csv
