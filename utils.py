@@ -5,7 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# Stopwords muy básicas en español; podés ampliarlas si querés
+# Stopwords básicas en español (podés ampliarlas si querés)
 STOPWORDS_ES = [
     "de", "la", "el", "los", "las", "y", "en", "del", "para", "con",
     "a", "por", "una", "un", "al", "que", "se", "su", "sus"
@@ -19,9 +19,9 @@ def build_tfidf_model(
     """
     Construye un modelo TF-IDF conjunto para objetivos y actividades.
     Devuelve:
-    - vectorizer
-    - matriz TF-IDF de objetivos (X_obj)
-    - matriz TF-IDF de actividades (X_act)
+      - vectorizer
+      - matriz TF-IDF de objetivos (X_obj)
+      - matriz TF-IDF de actividades (X_act)
     """
     corpus = textos_objetivos + textos_actividades
 
@@ -91,7 +91,7 @@ def compute_consistency_for_df(
     Calcula la consistencia entre la ACTIVIDAD y el OBJETIVO elegido.
 
     df debe tener como mínimo estas columnas:
-      - col_obj_codigo: código o identificador del objetivo elegido
+      - col_obj_codigo: código o identificador del objetivo elegido (puede ser débil)
       - col_obj_texto: texto completo del objetivo específico
       - col_actividad: actividad única
       - col_detalle: detalle de la actividad (opcional, puede estar vacío)
@@ -104,14 +104,18 @@ def compute_consistency_for_df(
       - Rank_obj_elegido
     """
 
-    # Reset index para que coincida con la matriz de similitud
+    # Trabajamos con copia e índice limpio
     df_work = df.reset_index(drop=True).copy()
 
-    # Catálogo de objetivos únicos
+    # Catálogo de objetivos únicos (código + texto)
     catalog = df_work[[col_obj_codigo, col_obj_texto]].drop_duplicates()
+
     codigos = catalog[col_obj_codigo].astype(str).tolist()
     textos_obj = catalog[col_obj_texto].astype(str).tolist()
+
+    # Mapear tanto por código como por texto
     idx_by_codigo = {c: i for i, c in enumerate(codigos)}
+    idx_by_texto = {t: i for i, t in enumerate(textos_obj)}
 
     # Texto enriquecido de actividades: actividad + detalle
     textos_act = (
@@ -135,9 +139,17 @@ def compute_consistency_for_df(
 
     for i in range(n_rows):
         codigo_elegido = str(df_work.at[i, col_obj_codigo])
+        texto_elegido = str(df_work.at[i, col_obj_texto])
 
-        # Si el código elegido no está en el catálogo, no podemos evaluar bien
-        if codigo_elegido not in idx_by_codigo:
+        # Intentar encontrar índice por código; si no, por texto
+        j_sel = None
+        if codigo_elegido in idx_by_codigo:
+            j_sel = idx_by_codigo[codigo_elegido]
+        elif texto_elegido in idx_by_texto:
+            j_sel = idx_by_texto[texto_elegido]
+
+        # Si no encontramos ni por código ni por texto, no podemos evaluar bien
+        if j_sel is None:
             scores.append(0)
             best_codes.append(None)
             sim_selected_list.append(0.0)
@@ -145,7 +157,6 @@ def compute_consistency_for_df(
             rank_list.append(None)
             continue
 
-        j_sel = idx_by_codigo[codigo_elegido]
         sims = sim_matrix[i, :]
 
         sim_sel = float(sims[j_sel])
