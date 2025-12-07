@@ -1,372 +1,452 @@
-import io
-import datetime as dt
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
+import re
+from io import BytesIO
+
+from unidecode import unidecode
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from docx import Document
-from docx.shared import Inches
 
 
-# ---------------------------------------------------------
-# Configuración básica de la app
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Consistencia PEI - Objetivos vs Actividades",
-    layout="wide",
-)
+# -----------------------------
+# Utilidades de normalización
+# -----------------------------
 
-st.title("Análisis de consistencia entre Objetivos Específicos y Actividades Únicas")
-st.write(
-    "Esta herramienta analiza la consistencia entre los objetivos específicos del PEI "
-    "y las actividades únicas cargadas por las unidades académicas."
-)
+def normalize_text(s: str) -> str:
+    """Normaliza texto: minúsculas, sin tildes, espacios simples."""
+    if pd.isna(s):
+        return ""
+    s = str(s)
+    s = unidecode(s)          # quita tildes
+    s = s.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    return s
 
 
-# ---------------------------------------------------------
-# Funciones auxiliares
-# ---------------------------------------------------------
-def detectar_columna_consistencia(df: pd.DataFrame) -> str | None:
+def normalize_colnames(df: pd.DataFrame) -> dict:
+    """Devuelve dict nombre_normalizado -> nombre_original."""
+    mapping = {}
+    for col in df.columns:
+        norm = normalize_text(col)
+        mapping[norm] = col
+    return mapping
+
+
+def find_column(norm_map: dict, patterns) -> str | None:
     """
-    Intenta encontrar la columna que contiene los valores de consistencia (%).
-    Busca por patrones frecuentes en el nombre de la columna.
+    Busca la primera columna cuyo nombre normalizado contenga
+    alguno de los patrones indicados.
     """
-    posibles = [
-        "consistencia (%)",
-        "consistencia%",
-        "consistencia",
-        "consistency",
-        "consistency (%)",
-    ]
+    if isinstance(patterns, str):
+        patterns = [patterns]
 
-    lower_cols = {c.lower(): c for c in df.columns}
-    for patron in posibles:
-        for col_lower, col_original in lower_cols.items():
-            if patron in col_lower:
-                return col_original
+    for norm_name, original in norm_map.items():
+        for pat in patterns:
+            if pat in norm_name:
+                return original
     return None
 
 
-def detectar_columna_anio(df: pd.DataFrame) -> str | None:
-    posibles = ["año", "anio", "ano", "year"]
-    lower_cols = {c.lower(): c for c in df.columns}
-    for patron in posibles:
-        for col_lower, col_original in lower_cols.items():
-            if patron == col_lower or patron in col_lower:
-                return col_original
-    return None
+# -----------------------------
+# Extracción de actividades únicas desde el Formulario Único
+# -----------------------------
 
-
-def detectar_columna_objetivo(df: pd.DataFrame) -> str | None:
-    posibles = ["objetivo específico", "objetivo especifico", "objetivos específicos",
-                "objetivos especificos", "objetivo", "objetivos"]
-    lower_cols = {c.lower(): c for c in df.columns}
-    for patron in posibles:
-        for col_lower, col_original in lower_cols.items():
-            if patron in col_lower:
-                return col_original
-    return None
-
-
-def detectar_columna_actividad(df: pd.DataFrame) -> str | None:
-    posibles = ["actividad", "actividad única", "actividad unica",
-                "actividad obj", "actividad objetivo"]
-    lower_cols = {c.lower(): c for c in df.columns}
-    for patron in posibles:
-        for col_lower, col_original in lower_cols.items():
-            if patron in col_lower:
-                return col_original
-    return None
-
-
-def categorizar_nivel_consistencia(valor: float) -> int:
+def extract_activities_from_form(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Mapea un porcentaje de consistencia (0–100) a niveles discretos:
+    A partir del Formulario Único (como sale de Looker / Google Sheets),
+    genera una tabla “plana” de actividades únicas:
+
+    ID, Año, Objetivo, Actividad, Detalle
+    """
+
+    norm_map = normalize_colnames(df)
+
+    # Columna Año
+    year_col = find_column(
+        norm_map,
+        ["ano", "año"]  # sin tilde gracias a unidecode
+    )
+
+    # Si no hay ID, generamos uno incremental
+    id_col = find_column(norm_map, ["id "])  # ej. "id " o "id actividad"
+    if id_col is None:
+        df = df.copy()
+        df["ID"] = np.arange(1, len(df) + 1)
+        id_col = "ID"
+
+    records = []
+
+    # Buscamos hasta 6 objetivos / actividades / detalles (1..6)
+    for i in range(1, 7):
+        # Objetivo específico i
+        obj_col = find_column(
+            norm_map,
+            [
+                f"objetivos especificos {i}",
+                f"objetivo especifico {i}",
+                f"objetivo {i}"
+            ]
+        )
+        # Actividad objetivo i
+        act_col = find_column(
+            norm_map,
+            [
+                f"actividades objetivo {i}",
+                f"actividad objetivo {i}",
+                f"actividad obj {i}"
+            ]
+        )
+        # Detalle actividad objetivo i
+        det_col = find_column(
+            norm_map,
+            [
+                f"detalle de la actividad objetivo {i}",
+                f"detalle actividad objetivo {i}",
+                f"detalle obj {i}"
+            ]
+        )
+
+        # Si no hay columna de objetivo o actividad, pasamos al siguiente i
+        if obj_col is None or act_col is None:
+            continue
+
+        for _, row in df.iterrows():
+            obj = row.get(obj_col, "")
+            act = row.get(act_col, "")
+            det = row.get(det_col, "") if det_col else ""
+
+            if (pd.isna(obj) or str(obj).strip() == "") and \
+               (pd.isna(act) or str(act).strip() == ""):
+                continue  # no hay nada para este objetivo en esta fila
+
+            record = {
+                "ID": row[id_col],
+                "Año": row.get(year_col, None),
+                "Objetivo específico": obj,
+                "Actividad única": act,
+                "Detalle actividad": det
+            }
+            records.append(record)
+
+    activities_df = pd.DataFrame(records)
+
+    # Limpieza básica
+    if not activities_df.empty:
+        activities_df["Año"] = activities_df["Año"].astype(str).str.strip()
+        activities_df["Objetivo específico"] = activities_df["Objetivo específico"].astype(str).str.strip()
+        activities_df["Actividad única"] = activities_df["Actividad única"].astype(str).str.strip()
+        activities_df["Detalle actividad"] = activities_df["Detalle actividad"].astype(str).str.strip()
+
+    return activities_df
+
+
+# -----------------------------
+# Cálculo de consistencia
+# -----------------------------
+
+def map_similarity_to_score(sim: float) -> int:
+    """
+    Mapea la similitud coseno (0-1) a los niveles discretos:
     0, 10, 30, 50, 70, 90, 100.
     """
-    if pd.isna(valor):
+    if np.isnan(sim) or sim <= 0:
         return 0
-
-    if valor < 5:
+    if sim < 0.10:
         return 0
-    elif valor < 20:
+    elif sim < 0.25:
         return 10
-    elif valor < 40:
+    elif sim < 0.40:
         return 30
-    elif valor < 60:
+    elif sim < 0.55:
         return 50
-    elif valor < 80:
+    elif sim < 0.70:
         return 70
-    elif valor < 95:
+    elif sim < 0.90:
         return 90
     else:
         return 100
 
 
-def generar_excel_para_descarga(df: pd.DataFrame) -> bytes:
+def compute_consistency(activities_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Devuelve un archivo Excel en memoria a partir del DataFrame.
+    Calcula la similitud semántica entre Objetivo específico y Actividad única
+    usando TF-IDF + coseno, y añade columnas:
+        - Similitud
+        - Consistencia (%)
     """
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Consistencia")
-    buffer.seek(0)
-    return buffer.getvalue()
+
+    df = activities_df.copy()
+
+    objetivos = df["Objetivo específico"].fillna("").astype(str)
+    actividades = (
+        df["Actividad única"].fillna("").astype(str) + " " +
+        df["Detalle actividad"].fillna("").astype(str)
+    )
+
+    # Corpus conjunto para vectorizar
+    corpus = objetivos.tolist() + actividades.tolist()
+
+    vectorizer = TfidfVectorizer(
+        ngram_range=(1, 2),
+        stop_words="spanish"
+    )
+    vectorizer.fit(corpus)
+
+    obj_vecs = vectorizer.transform(objetivos)
+    act_vecs = vectorizer.transform(actividades)
+
+    sims = []
+    for i in range(obj_vecs.shape[0]):
+        sim = cosine_similarity(obj_vecs[i], act_vecs[i])[0, 0]
+        sims.append(sim)
+
+    df["Similitud"] = sims
+    df["Consistencia (%)"] = df["Similitud"].apply(map_similarity_to_score)
+
+    return df
 
 
-def generar_informe_word(
-    df: pd.DataFrame,
-    col_consistencia: str,
-    col_anio: str | None,
-    promedio_global: float,
-    distribucion_niveles: pd.Series,
-) -> bytes:
+# -----------------------------
+# Generación de Excel
+# -----------------------------
+
+def build_summary_sheets(df_cons: pd.DataFrame):
     """
-    Genera un informe en Word con:
-    - Resumen numérico global
-    - Distribución por niveles de consistencia
-    - Interpretación
-    - Conclusiones y recomendaciones
-    Devuelve el archivo .docx como bytes.
+    Construye:
+      - resumen por Año y Objetivo
+      - indicadores globales
+      - distribución de actividades por nivel de consistencia
     """
+    # Resumen Año / Objetivo
+    resumen = (
+        df_cons
+        .groupby(["Año", "Objetivo específico"], dropna=False)
+        .agg(
+            Cant_actividades=("Actividad única", "count"),
+            Consistencia_promedio=("Consistencia (%)", "mean")
+        )
+        .reset_index()
+    )
+    resumen["Consistencia_promedio"] = resumen["Consistencia_promedio"].round(2)
+
+    # Indicadores globales
+    total_acts = len(df_cons)
+    consist_prom = df_cons["Consistencia (%)"].mean() if total_acts > 0 else 0
+    consist_prom = round(consist_prom, 2)
+
+    indicadores = pd.DataFrame({
+        "Indicador": [
+            "Cantidad total de actividades únicas",
+            "Consistencia general (%)"
+        ],
+        "Valor": [
+            total_acts,
+            consist_prom
+        ]
+    })
+
+    # Distribución de niveles de consistencia
+    dist = (
+        df_cons["Consistencia (%)"]
+        .value_counts()
+        .sort_index()
+        .rename_axis("Consistencia (%)")
+        .reset_index(name="Cantidad")
+    )
+
+    return resumen, indicadores, dist
+
+
+def generate_excel_bytes(df_cons: pd.DataFrame,
+                         resumen: pd.DataFrame,
+                         indicadores: pd.DataFrame,
+                         dist: pd.DataFrame) -> bytes:
+    """Genera un Excel con varias hojas y lo devuelve como bytes."""
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_cons.to_excel(writer, sheet_name="Detalle actividades", index=False)
+        resumen.to_excel(writer, sheet_name="Resumen año-objetivo", index=False)
+        indicadores.to_excel(writer, sheet_name="Indicadores globales", index=False)
+        dist.to_excel(writer, sheet_name="Distribución consistencia", index=False)
+
+    output.seek(0)
+    return output.read()
+
+
+# -----------------------------
+# Generación de informe Word
+# -----------------------------
+
+def generate_word_report_bytes(indicadores: pd.DataFrame,
+                               dist: pd.DataFrame) -> bytes:
+    """
+    Construye un informe en Word con:
+      - indicadores globales
+      - análisis breve
+      - tabla de distribución por niveles de consistencia
+    """
+
     doc = Document()
+    doc.add_heading("Informe de Consistencia PEI", level=1)
 
-    # Portada / título
-    doc.add_heading(
-        "Informe de consistencia entre Objetivos Específicos y Actividades Únicas",
-        level=1,
-    )
-    doc.add_paragraph(
-        f"Fecha de generación del informe: {dt.datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-    doc.add_paragraph(
-        "Unidad responsable: Secretaría de Investigación / Observatorio de IA - UCCuyo"
-    )
-    doc.add_paragraph("")
+    # Indicadores globales
+    doc.add_heading("1. Indicadores globales", level=2)
 
-    # Datos básicos
-    total_actividades = len(df)
-    doc.add_heading("1. Resumen general", level=2)
-    p = doc.add_paragraph()
-    p.add_run("Cantidad total de actividades únicas analizadas: ").bold = True
-    p.add_run(f"{total_actividades}")
+    total_acts = int(indicadores.loc[indicadores["Indicador"] ==
+                                     "Cantidad total de actividades únicas", "Valor"].values[0])
+    consist_gen = float(indicadores.loc[indicadores["Indicador"] ==
+                                        "Consistencia general (%)", "Valor"].values[0])
 
     p = doc.add_paragraph()
-    p.add_run("Consistencia promedio global: ").bold = True
-    p.add_run(f"{promedio_global:.2f} %")
+    p.add_run("Cantidad total de actividades únicas: ").bold = True
+    p.add_run(str(total_acts))
 
-    if col_anio is not None:
-        anios = sorted(df[col_anio].dropna().unique())
-        if len(anios) > 0:
-            p = doc.add_paragraph()
-            p.add_run("Años considerados en el análisis: ").bold = True
-            p.add_run(", ".join(str(a) for a in anios))
+    p = doc.add_paragraph()
+    p.add_run("Consistencia general promedio: ").bold = True
+    p.add_run(f"{consist_gen:.2f} %")
 
-    doc.add_paragraph("")
-
-    # Tabla de distribución por niveles
+    # Distribución
     doc.add_heading("2. Distribución por niveles de consistencia", level=2)
-    doc.add_paragraph(
-        "La siguiente tabla muestra cuántas actividades se ubican en cada nivel de "
-        "consistencia (0, 10, 30, 50, 70, 90, 100), donde 0 indica ausencia de "
-        "alineación y 100 indica una coincidencia plena entre actividad y objetivo."
-    )
-
-    tabla = doc.add_table(rows=1 + len(distribucion_niveles), cols=2)
-    hdr_cells = tabla.rows[0].cells
-    hdr_cells[0].text = "Nivel de consistencia (%)"
+    table = doc.add_table(rows=1, cols=2)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = "Consistencia (%)"
     hdr_cells[1].text = "Cantidad de actividades"
 
-    for i, (nivel, cantidad) in enumerate(distribucion_niveles.items(), start=1):
-        row_cells = tabla.rows[i].cells
-        row_cells[0].text = str(int(nivel))
-        row_cells[1].text = str(int(cantidad))
+    for _, row in dist.iterrows():
+        row_cells = table.add_row().cells
+        row_cells[0].text = str(int(row["Consistencia (%)"]))
+        row_cells[1].text = str(int(row["Cantidad"]))
 
-    doc.add_paragraph("")
+    # Análisis e interpretación
+    doc.add_heading("3. Análisis e interpretación", level=2)
 
-    # 3. Interpretación de resultados
-    doc.add_heading("3. Interpretación de los resultados", level=2)
+    analysis_par = doc.add_paragraph()
+    analysis_par.add_run(
+        "El indicador de consistencia general refleja el grado de concordancia "
+        "entre los objetivos específicos declarados por las unidades académicas "
+        "y las actividades únicas que informan como acciones de cumplimiento del PEI. "
+    )
 
-    if promedio_global < 20:
-        nivel_texto = "muy bajo"
-    elif promedio_global < 40:
-        nivel_texto = "bajo"
-    elif promedio_global < 60:
-        nivel_texto = "medio"
-    elif promedio_global < 80:
-        nivel_texto = "aceptable/alto"
+    if consist_gen < 30:
+        doc.add_paragraph(
+            "El valor promedio obtenido se encuentra en un rango bajo. "
+            "Esto sugiere que muchas actividades podrían estar siendo cargadas "
+            "en objetivos que no se corresponden plenamente con su finalidad. "
+            "Se recomienda revisar la redacción de los objetivos, ofrecer "
+            "orientaciones más precisas para la carga de actividades y realizar "
+            "instancias de capacitación focalizada."
+        )
+    elif consist_gen < 60:
+        doc.add_paragraph(
+            "El valor promedio de consistencia se ubica en un rango medio. "
+            "Existe una relación razonable entre objetivos y actividades, "
+            "aunque persisten desajustes que pueden corregirse mediante "
+            "instancias de retroalimentación con las unidades y ajustes "
+            "en la planificación operativa."
+        )
     else:
-        nivel_texto = "muy alto"
+        doc.add_paragraph(
+            "El valor promedio de consistencia se encuentra en un rango alto. "
+            "En términos generales, las actividades están bien alineadas con "
+            "los objetivos específicos planteados en el PEI. "
+            "Es conveniente consolidar estas buenas prácticas y focalizar "
+            "las acciones de mejora en aquellos objetivos con menor consistencia."
+        )
 
+    doc.add_heading("4. Conclusiones", level=2)
     doc.add_paragraph(
-        f"El índice de consistencia promedio obtenido es de {promedio_global:.2f} %, "
-        f"lo que se interpreta como un nivel **{nivel_texto}** de concordancia entre "
-        "las actividades reportadas por las unidades académicas y los objetivos "
-        "específicos del Plan Estratégico Institucional (PEI)."
-    )
-
-    doc.add_paragraph(
-        "La distribución por niveles permite identificar en qué tramo se concentra la "
-        "mayor parte de las actividades. Una alta proporción en niveles de 0–10 % "
-        "indica problemas de alineación o errores de clasificación de las acciones en "
-        "los objetivos. En cambio, una mayor presencia en niveles de 70–100 % sugiere "
-        "un uso más criterioso del PEI como marco orientador."
-    )
-
-    # 4. Conclusiones
-    doc.add_heading("4. Conclusiones principales", level=2)
-    doc.add_paragraph(
-        "1. El valor promedio global sintetiza el grado de alineación efectiva entre "
-        "la planificación estratégica y la ejecución reportada. Esto permite estimar "
-        "en qué medida el PEI está siendo utilizado como guía real de la gestión."
-    )
-    doc.add_paragraph(
-        "2. La presencia de actividades en niveles bajos de consistencia puede deberse "
-        "a dos fenómenos: (a) acciones que efectivamente no responden al objetivo en "
-        "el que fueron cargadas, o (b) objetivos mal seleccionados en el formulario "
-        "de reporte."
-    )
-    doc.add_paragraph(
-        "3. Los niveles altos de consistencia evidencian buenas prácticas de "
-        "planificación y seguimiento, donde cada acción se vincula claramente con el "
-        "resultado esperado del PEI."
+        "El análisis de consistencia entre objetivos específicos y actividades únicas "
+        "permite disponer de un indicador sintético de calidad de la planificación. "
+        "Este insumo puede incorporarse a los procesos de monitoreo institucional, "
+        "retroalimentando la formulación de proyectos, la asignación de recursos "
+        "y la toma de decisiones estratégicas en cada unidad académica."
     )
 
-    # 5. Recomendaciones
-    doc.add_heading("5. Recomendaciones para la gestión institucional", level=2)
-    doc.add_paragraph(
-        "• Devolver a cada unidad académica un resumen de su propio índice de "
-        "consistencia, para fomentar la autoevaluación y el ajuste de futuras "
-        "cargas de actividades."
-    )
-    doc.add_paragraph(
-        "• Revisar las descripciones de los objetivos específicos en las "
-        "comunicaciones operativas, de modo que sean más claras y fácilmente "
-        "identificables por quienes completan los formularios."
-    )
-    doc.add_paragraph(
-        "• Incorporar instancias de capacitación breves (microtalleres o cápsulas "
-        "virtuales) sobre cómo vincular correctamente cada actividad con el objetivo "
-        "correspondiente."
-    )
-    doc.add_paragraph(
-        "• Utilizar este indicador de consistencia como una métrica periódica del "
-        "Sistema de Aseguramiento de la Calidad y del seguimiento del PEI, "
-        "integrándolo en los tableros de control (Power BI / Looker Studio)."
-    )
-
-    doc.add_paragraph("")
-    doc.add_paragraph(
-        "Este informe puede complementarse con análisis cualitativos de ejemplos de "
-        "actividades con alta y baja consistencia, para retroalimentar las prácticas "
-        "de gestión de cada unidad."
-    )
-
-    # Guardar a memoria
-    buffer = io.BytesIO()
+    # Exportar a bytes
+    buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
-    return buffer.getvalue()
+    return buffer.read()
 
 
-# ---------------------------------------------------------
-# Carga de archivo
-# ---------------------------------------------------------
-st.sidebar.header("1. Subir archivo de consistencia")
-uploaded_file = st.sidebar.file_uploader(
-    "Suba el archivo Excel con la columna 'Consistencia (%)'",
-    type=["xlsx", "xls"],
+# -----------------------------
+# Interfaz Streamlit
+# -----------------------------
+
+st.set_page_config(
+    page_title="Consistencia PEI: Objetivos vs Actividades",
+    layout="wide"
 )
 
-if uploaded_file is None:
-    st.info("Subí un archivo Excel para comenzar el análisis.")
-    st.stop()
+st.title("Análisis de consistencia entre Objetivos Específicos y Actividades Únicas")
+st.write(
+    "Subí el archivo Excel del **Formulario Único del PEI**. "
+    "La aplicación extraerá todas las actividades únicas, calculará la "
+    "consistencia semántica entre cada objetivo específico y la actividad "
+    "cargada, y generará un Excel y un informe en Word."
+)
 
-# Leer el Excel
-df = pd.read_excel(uploaded_file)
+uploaded_file = st.file_uploader(
+    "Subir archivo Excel del Formulario Único",
+    type=["xlsx", "xls"]
+)
 
-if df.empty:
-    st.error("El archivo está vacío o no se pudo leer correctamente.")
-    st.stop()
+if uploaded_file is not None:
+    try:
+        raw_df = pd.read_excel(uploaded_file)
+    except Exception as e:
+        st.error(f"Error al leer el archivo: {e}")
+        st.stop()
 
-# Detectar columnas clave
-col_consistencia = detectar_columna_consistencia(df)
-col_anio = detectar_columna_anio(df)
-col_obj = detectar_columna_objetivo(df)
-col_act = detectar_columna_actividad(df)
+    st.subheader("Vista previa del archivo original")
+    st.dataframe(raw_df.head())
 
-if col_consistencia is None:
-    st.error(
-        "No se encontró ninguna columna de consistencia. "
-        "Asegurate de que exista una columna llamada, por ejemplo, "
-        "'Consistencia (%)'."
+    # 1) Extraer actividades únicas
+    activities_df = extract_activities_from_form(raw_df)
+
+    if activities_df.empty:
+        st.error(
+            "No se pudieron extraer actividades únicas. "
+            "Revisá que el archivo tenga columnas de 'Objetivos específicos', "
+            "'Actividades Objetivo' y 'Detalle de la Actividad Objetivo'."
+        )
+        st.stop()
+
+    st.subheader("Actividades únicas extraídas")
+    st.write(f"Se extrajeron **{len(activities_df)}** actividades.")
+    st.dataframe(activities_df.head())
+
+    # 2) Calcular consistencia
+    df_cons = compute_consistency(activities_df)
+
+    resumen, indicadores, dist = build_summary_sheets(df_cons)
+
+    st.subheader("Indicadores globales")
+    st.table(indicadores)
+
+    st.subheader("Distribución de actividades por nivel de consistencia")
+    st.table(dist)
+
+    st.subheader("Detalle de actividades con consistencia")
+    st.dataframe(df_cons)
+
+    # 3) Descarga de Excel
+    excel_bytes = generate_excel_bytes(df_cons, resumen, indicadores, dist)
+    st.download_button(
+        label="📥 Descargar resultados en Excel",
+        data=excel_bytes,
+        file_name="consistencia_pei_objetivo_actividad.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    st.stop()
 
-# Asegurar que los valores sean numéricos
-df[col_consistencia] = pd.to_numeric(df[col_consistencia], errors="coerce")
-
-# Crear columna de nivel discreto, si no existe
-if "Nivel consistencia" not in df.columns:
-    df["Nivel consistencia"] = df[col_consistencia].apply(categorizar_nivel_consistencia)
-
-# ---------------------------------------------------------
-# Cálculo de indicadores globales
-# ---------------------------------------------------------
-total_actividades = len(df)
-promedio_global = df[col_consistencia].mean()
-
-distribucion_niveles = (
-    df["Nivel consistencia"]
-    .value_counts()
-    .sort_index()
-)
-
-st.subheader("Indicadores globales")
-
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("Cantidad total de actividades únicas", total_actividades)
-with col2:
-    st.metric("Consistencia promedio global (%)", f"{promedio_global:.2f}")
-
-st.write("### Distribución de actividades por nivel de consistencia (%)")
-st.dataframe(
-    pd.DataFrame(
-        {
-            "Nivel de consistencia (%)": distribucion_niveles.index.astype(int),
-            "Cantidad de actividades": distribucion_niveles.values.astype(int),
-        }
-    ),
-    use_container_width=True,
-)
-
-# ---------------------------------------------------------
-# Descarga de Excel procesado
-# ---------------------------------------------------------
-st.subheader("Descargar resultados")
-
-excel_bytes = generar_excel_para_descarga(df)
-st.download_button(
-    label="📊 Descargar resultados en Excel",
-    data=excel_bytes,
-    file_name="consistencia_pei_resultados.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
-
-# ---------------------------------------------------------
-# Generar y descargar informe en Word
-# ---------------------------------------------------------
-word_bytes = generar_informe_word(
-    df=df,
-    col_consistencia=col_consistencia,
-    col_anio=col_anio,
-    promedio_global=promedio_global,
-    distribucion_niveles=distribucion_niveles,
-)
-
-st.download_button(
-    label="📄 Descargar informe de consistencia en Word",
-    data=word_bytes,
-    file_name="informe_consistencia_pei.docx",
-    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-)
+    # 4) Descarga de informe Word
+    word_bytes = generate_word_report_bytes(indicadores, dist)
+    st.download_button(
+        label="📄 Descargar informe en Word",
+        data=word_bytes,
+        file_name="informe_consistencia_pei.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
