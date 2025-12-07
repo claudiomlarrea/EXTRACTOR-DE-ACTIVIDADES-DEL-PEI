@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+
 from normalizer import normalize_columns
+from consistency import add_consistency_to_clean, add_consistency_to_resumen
 
 st.set_page_config(page_title="Extractor PEI", page_icon="📘", layout="wide")
 
-st.title("📘 Extractor y Normalizador de Actividades del PEI")
+st.title("📘 Extractor PEI + Consistencia de Objetivos-Actividades")
 
 uploaded_file = st.file_uploader("Cargar archivo Excel original", type=["xlsx"])
 
@@ -21,7 +23,10 @@ st.dataframe(df.head(), use_container_width=True)
 # 2) Normalizar columnas -> plantilla estándar
 clean_df = normalize_columns(df)
 
-st.subheader("Hoja 1: PEI_normalizado (plantilla estándar)")
+# 2.b) Agregar consistencia a la plantilla
+clean_df = add_consistency_to_clean(clean_df)
+
+st.subheader("Hoja 1: PEI_normalizado + Consistencia por objetivo")
 st.dataframe(clean_df.head(), use_container_width=True)
 
 
@@ -43,9 +48,9 @@ def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
             }
         )
 
-        # Filtrar filas donde no haya actividad (ni objetivo) relevante
-        mascara = tmp["Actividad relacionada"].astype(str).str.strip() != ""
-        tmp = tmp[mascara]
+        # Filtrar filas sin actividad
+        mask = tmp["Actividad relacionada"].astype(str).str.strip() != ""
+        tmp = tmp[mask]
 
         filas.append(tmp)
 
@@ -61,7 +66,10 @@ def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
 
 resumen_df = build_resumen(clean_df)
 
-st.subheader("Hoja 2: Resumen (Año - Objetivo específico - Actividad relacionada)")
+# 3.b) Agregar consistencia a la hoja Resumen
+resumen_df = add_consistency_to_resumen(resumen_df)
+
+st.subheader("Hoja 2: Resumen + Índice de consistencia")
 st.dataframe(resumen_df.head(), use_container_width=True)
 
 
@@ -80,8 +88,8 @@ excel_bytes = to_excel_with_two_sheets(clean_df, resumen_df)
 st.subheader("Descarga del archivo Excel")
 
 st.download_button(
-    label="📥 Descargar Excel con ambas hojas",
+    label="📥 Descargar Excel con consistencia (2 hojas)",
     data=excel_bytes,
-    file_name="pei_actividades_filtradas_con_resumen.xlsx",
+    file_name="pei_actividades_consistencia.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
