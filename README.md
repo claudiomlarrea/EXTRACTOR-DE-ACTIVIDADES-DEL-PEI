@@ -1,27 +1,15 @@
-# Extractor de columnas del PEI 📊
+# Extractor y Normalizador de actividades PEI - Universidad Católica de Cuyo
 
-Pequeña aplicación en **Streamlit** para trabajar con los archivos Excel
-descargados desde **Looker Studio** o desde el **Formulario Único para el PEI**.
+Este proyecto toma el archivo Excel exportado desde Looker Studio o Google Forms
+y genera una hoja plantilla estándar con columnas:
 
-Permite:
-- Subir el Excel original.
-- Elegir qué columnas conservar.
-- Previsualizar el resultado.
-- Descargar un nuevo Excel o CSV solo con las columnas seleccionadas.
+ID, Año, Objetivo 1, Actividad Obj 1, Detalle Obj 1, … Objetivo 6, Actividad Obj 6, Detalle Obj 6.
 
----
+Funciona aunque el archivo original tenga:
 
-## Requisitos
+- columnas mezcladas,
+- nombres largos o incorrectos,
+- orden aleatorio.
 
-- Python 3.9 o superior.
-- `pip` instalado.
-
-## Instalación
-
-```bash
-git clone https://github.com/TU_USUARIO/pei-column-extractor.git
-cd pei-column-extractor
-python -m venv .venv
-source .venv/bin/activate   # En Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+## Uso
 
