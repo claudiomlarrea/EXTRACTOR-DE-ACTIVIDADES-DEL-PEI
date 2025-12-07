@@ -2,120 +2,28 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-from normalizer import normalize_columns
-from consistency import add_consistency_to_clean, add_consistency_to_resumen
+from utils import compute_consistency_for_df
 
 
 st.set_page_config(
-    page_title="Extractor PEI + Consistencia",
+    page_title="Consistencia PEI (Objetivo ↔ Actividad)",
     page_icon="📘",
     layout="wide"
 )
 
-
-def build_resumen(clean_df: pd.DataFrame) -> pd.DataFrame:
+st.title("📘 Calculadora de Consistencia PEI")
+st.write(
     """
-    Construye una tabla 'larga' con:
-    ID - Año - Objetivo específico - Actividad relacionada
-    a partir de la plantilla normalizada (Objetivo 1..6, Actividad Obj 1..6).
+    Esta herramienta calcula la **consistencia** entre el **objetivo específico**
+    elegido por la unidad académica y la **actividad única** cargada, usando
+    similitud semántica (TF-IDF) y devolviendo una nota discreta:
+
+    **0, 10, 30, 50, 70, 90 o 100 (%).**
     """
-    filas = []
-
-    for obj in range(1, 7):
-        col_id = clean_df["ID"]
-        col_year = clean_df["Año"]
-        col_obj = clean_df[f"Objetivo {obj}"]
-        col_act = clean_df[f"Actividad Obj {obj}"]
-
-        tmp = pd.DataFrame(
-            {
-                "ID": col_id,
-                "Año": col_year,
-                "Objetivo específico": col_obj,
-                "Actividad relacionada": col_act,
-            }
-        )
-
-        # Filtrar filas sin actividad
-        mask = tmp["Actividad relacionada"].astype(str).str.strip() != ""
-        tmp = tmp[mask]
-
-        filas.append(tmp)
-
-    if filas:
-        resumen = pd.concat(filas, ignore_index=True)
-    else:
-        resumen = pd.DataFrame(
-            columns=["ID", "Año", "Objetivo específico", "Actividad relacionada"]
-        )
-
-    return resumen
-
-
-def build_indicators(resumen_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Crea una tabla pequeña de indicadores globales:
-    - Cantidad total de actividades únicas (por ID)
-    - Consistencia general promedio (%)
-    """
-    # 1) Cantidad de actividades únicas por ID
-    if "ID" in resumen_df.columns:
-        total_actividades_unicas = resumen_df["ID"].nunique()
-    else:
-        # fallback por si faltara la columna (no debería suceder)
-        actividades = resumen_df["Actividad relacionada"].astype(str).str.strip()
-        total_actividades_unicas = actividades[actividades != ""].nunique()
-
-    # 2) Promedio de consistencia general
-    if "Consistencia (%)" in resumen_df.columns:
-        consistencia_general = resumen_df["Consistencia (%)"].mean()
-    else:
-        consistencia_general = 0.0
-
-    indicadores = pd.DataFrame(
-        {
-            "Indicador": [
-                "Cantidad total de actividades únicas",
-                "Consistencia general (%)",
-            ],
-            "Valor": [
-                total_actividades_unicas,
-                round(consistencia_general, 2),
-            ],
-        }
-    )
-
-    return indicadores
-
-
-def to_excel_three_sheets(
-    plantilla: pd.DataFrame,
-    resumen: pd.DataFrame,
-    indicadores: pd.DataFrame
-) -> bytes:
-    """
-    Exporta las tres hojas:
-    - PEI_normalizado
-    - Resumen
-    - Indicadores
-    en un único archivo Excel.
-    """
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        plantilla.to_excel(writer, index=False, sheet_name="PEI_normalizado")
-        resumen.to_excel(writer, index=False, sheet_name="Resumen")
-        indicadores.to_excel(writer, index=False, sheet_name="Indicadores")
-    return buffer.getvalue()
-
-
-# =========================
-#       INTERFAZ UI
-# =========================
-
-st.title("📘 Extractor PEI + Consistencia de Objetivos-Actividades")
+)
 
 uploaded_file = st.file_uploader(
-    "Cargar archivo Excel original (Formulario Único / Looker Studio)",
+    "Cargar archivo Excel con Objetivos y Actividades",
     type=["xlsx"]
 )
 
@@ -123,7 +31,7 @@ if uploaded_file is None:
     st.info("Subí un archivo .xlsx para comenzar.")
     st.stop()
 
-# 1) Leer archivo original
+# 1) Leer el archivo
 try:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
 except Exception as e:
@@ -133,38 +41,97 @@ except Exception as e:
 st.subheader("Vista previa del archivo original")
 st.dataframe(df.head(), use_container_width=True)
 
-# 2) Normalizar columnas -> plantilla estándar
-clean_df = normalize_columns(df)
+if df.empty:
+    st.error("El archivo no tiene filas.")
+    st.stop()
 
-# 2.b) Agregar consistencia por objetivo a la plantilla
-clean_df = add_consistency_to_clean(clean_df)
+columns = list(df.columns)
 
-st.subheader("Hoja 1: PEI_normalizado + Consistencia por objetivo")
-st.dataframe(clean_df.head(), use_container_width=True)
+st.markdown("### Seleccioná las columnas correspondientes")
 
-# 3) Construir hoja de RESUMEN (ID - Año - Objetivo - Actividad)
-resumen_df = build_resumen(clean_df)
+col1, col2 = st.columns(2)
 
-# 3.b) Agregar consistencia a la hoja Resumen
-resumen_df = add_consistency_to_resumen(resumen_df)
+with col1:
+    col_obj_codigo = st.selectbox(
+        "Columna con el **código / identificador** del objetivo específico",
+        options=columns,
+        index=0
+    )
 
-st.subheader("Hoja 2: Resumen (ID - Año - Objetivo - Actividad + Consistencia)")
-st.dataframe(resumen_df.head(), use_container_width=True)
+    col_actividad = st.selectbox(
+        "Columna con el texto de la **actividad única**",
+        options=columns,
+        index=1 if len(columns) > 1 else 0
+    )
 
-# 4) Construir hoja de INDICADORES
-indicadores_df = build_indicators(resumen_df)
+with col2:
+    col_obj_texto = st.selectbox(
+        "Columna con el **texto completo** del objetivo específico",
+        options=columns,
+        index=2 if len(columns) > 2 else 0
+    )
 
-st.subheader("Hoja 3: Indicadores globales")
-st.dataframe(indicadores_df, use_container_width=True)
+    col_detalle = st.selectbox(
+        "Columna con el **detalle de la actividad** (si existe)",
+        options=["(sin detalle)"] + columns,
+        index=0
+    )
 
-# 5) Exportar las TRES hojas en un solo Excel
-excel_bytes = to_excel_three_sheets(clean_df, resumen_df, indicadores_df)
+if col_detalle == "(sin detalle)":
+    # Creamos una columna vacía para simplificar la lógica
+    df["_DETALLE_VACIO_"] = ""
+    col_detalle_real = "_DETALLE_VACIO_"
+else:
+    col_detalle_real = col_detalle
 
-st.subheader("Descarga del archivo Excel final")
+st.markdown("---")
 
-st.download_button(
-    label="📥 Descargar Excel con 3 hojas (PEI_normalizado, Resumen, Indicadores)",
-    data=excel_bytes,
-    file_name="pei_actividades_consistencia.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+if st.button("Calcular consistencia", type="primary"):
+    with st.spinner("Calculando similitud y consistencia..."):
+        result_df = compute_consistency_for_df(
+            df,
+            col_obj_codigo=col_obj_codigo,
+            col_obj_texto=col_obj_texto,
+            col_actividad=col_actividad,
+            col_detalle=col_detalle_real
+        )
+
+    st.subheader("Resultados con Consistencia (%)")
+    st.dataframe(result_df.head(50), use_container_width=True)
+
+    # Indicadores básicos
+    st.markdown("### Indicadores globales")
+
+    # Promedio de consistencia
+    mean_consistency = result_df["Consistencia (%)"].mean()
+    st.write(f"**Consistencia promedio:** {mean_consistency:.2f} %")
+
+    # Distribución de valores en la escala discreta
+    distrib = (
+        result_df["Consistencia (%)"]
+        .value_counts()
+        .sort_index()
+        .rename_axis("Consistencia")
+        .reset_index(name="Cantidad")
+    )
+
+    st.write("**Distribución de actividades por nivel de consistencia:**")
+    st.dataframe(distrib, use_container_width=True)
+
+    # Preparar descarga de Excel
+    def to_excel_bytes(df_out: pd.DataFrame) -> bytes:
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_out.to_excel(writer, index=False, sheet_name="Consistencia_PEI")
+        return buffer.getvalue()
+
+    excel_bytes = to_excel_bytes(result_df)
+
+    st.download_button(
+        label="📥 Descargar resultados en Excel",
+        data=excel_bytes,
+        file_name="consistencia_pei_objetivo_actividad.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+else:
+    st.info("Configurá las columnas y hacé clic en **Calcular consistencia**.")
