@@ -182,8 +182,11 @@ CVAR_NOMBRE = "Categorización CVar 2026"
 # =========================
 
 _acta_focus = st.session_state.get("acta_archivos")
-_ancla_archivos = None
-if _acta_focus:
+_abrir_cvar = st.session_state.pop("abrir_cvar", False)
+_ancla_archivos = "archivo-cvar" if _abrir_cvar else None
+if _abrir_cvar:
+    st.info("Categorización CVar 2026: use la carpeta destacada para subir el archivo.")
+elif _acta_focus:
     _tiene_carpeta = any(f"Acta {_acta_focus}" in nombre for nombre in actas)
     if _tiene_carpeta:
         st.info(f"Acta {_acta_focus}: use la carpeta de ese Orden del Día para subir el archivo.")

@@ -1308,14 +1308,15 @@ _actas_ordenadas = sorted(actas_dict.keys())
 _acta_sel = st.session_state.get("dashboard_acta_seleccion")
 if _acta_sel not in actas_dict:
     _acta_sel = None
+_cvar_sel = bool(st.session_state.get("dashboard_cvar_seleccion"))
 
-# Tarjetas compactas para elegir acta
+# Tarjetas compactas para elegir acta (+ CVar al final)
 st.markdown("**Acta en trabajo**")
 cols_pick = st.columns(4)
 for idx, n in enumerate(_actas_ordenadas):
     estado_txt, estado_bg = _estado_acta(n)
     mes = actas_dict[n]["mes"]
-    activa = _acta_sel == n
+    activa = (not _cvar_sel) and _acta_sel == n
     clase = "ucc-pick-card is-active" if activa else "ucc-pick-card"
     with cols_pick[idx % 4]:
         st.markdown(
@@ -1337,10 +1338,51 @@ for idx, n in enumerate(_actas_ordenadas):
             disabled=activa,
         ):
             st.session_state["dashboard_acta_seleccion"] = n
+            st.session_state.pop("dashboard_cvar_seleccion", None)
             st.session_state.pop("dashboard_acta_detalle", None)
             st.rerun()
 
-if _acta_sel is None:
+# Último lugar del grid: tarjeta CVar
+with cols_pick[len(_actas_ordenadas) % 4]:
+    clase_cvar = "ucc-pick-card is-active" if _cvar_sel else "ucc-pick-card"
+    st.markdown(
+        f"""
+        <div class="{clase_cvar}">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+            <p class="ucc-pick-title">CVar 2026</p>
+            <span class="ucc-badge-pill" style="background:#0b6b5d">Carga</span>
+          </div>
+          <div class="ucc-pick-mes">Categorización</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Elegida" if _cvar_sel else "Elegir",
+        key="dash_pick_cvar",
+        use_container_width=True,
+        disabled=_cvar_sel,
+    ):
+        st.session_state["dashboard_cvar_seleccion"] = True
+        st.session_state.pop("dashboard_acta_seleccion", None)
+        st.session_state.pop("dashboard_acta_detalle", None)
+        st.rerun()
+
+if _cvar_sel:
+    st.markdown(
+        """
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:10px 0 12px 0;">
+          <span style="color:#334155; font-weight:700;">Seleccionada: Categorización CVar 2026</span>
+          <span class="ucc-badge-pill" style="background:#0b6b5d">Carga</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Abrir carpeta CVar / Cargar archivo", key="dash_accion_cvar", use_container_width=True):
+        st.session_state.pop("acta_archivos", None)
+        st.session_state["abrir_cvar"] = True
+        st.switch_page("pages/2_Carga_de_Archivos.py")
+elif _acta_sel is None:
     st.info("Elija un acta con el botón **Elegir** para usar las acciones.")
     a1, a2, a3, a4 = st.columns(4)
     with a1:
