@@ -79,6 +79,41 @@ h1, h2, h3, p, li {
     color: #064a3f !important;
     font-weight: 600 !important;
 }
+
+.card {
+    background: #ffffff;
+    border: 1px solid #c7dfd5;
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin: 12px 0 16px 0;
+    box-shadow: 0 2px 8px rgba(2, 40, 33, 0.06);
+}
+
+.card h3 {
+    color: #064a3f !important;
+    margin: 0 0 8px 0;
+    font-size: 1.05rem;
+}
+
+.card a {
+    color: #0b6b5d !important;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.card a:hover {
+    text-decoration: underline;
+}
+
+.card.ucc-card-cvar {
+    border: 2px solid #0b6b5d;
+    background: linear-gradient(180deg, #f3faf7 0%, #ffffff 100%);
+}
+
+.no-link {
+    color: #b45309 !important;
+    font-weight: 700;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -114,6 +149,16 @@ if st.button("↑ Actas", key="archivos_volver_actas"):
 
 st.markdown("### Seleccione la carpeta correspondiente y cargue el archivo directamente en Google Drive")
 
+st.markdown(
+    """
+    <div class="card ucc-card-cvar" style="margin-top:8px;">
+      <h3>📁 Acceso rápido · Categorización CVar 2026</h3>
+      <p>🔗 <a href="https://drive.google.com/drive/folders/1kLCX1LIHYpEH8W0ud-5SW39Z_GGGLXmp" target="_blank">Abrir carpeta CVar</a></p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # =========================
 # LINKS (TODOS CONFIGURADOS)
 # =========================
@@ -127,8 +172,10 @@ actas = {
     "Orden del Día Septiembre - Acta 194": "https://drive.google.com/drive/folders/1XkVQdpn4zNQhy2pLx0SbfTxfDQQw0eoY",
     "Orden del Día Octubre - Acta 195": "https://drive.google.com/drive/folders/1UhA4EHVhHFlfB75bkbsLGYDm4YzmVZI0",
     "Orden del Día Noviembre - Acta 196": "https://drive.google.com/drive/folders/1zy8FMLNbqRUkv9EaIgpCKebf1kgy1nmv",
-    "Orden del Día Diciembre - Acta 197": "https://drive.google.com/drive/folders/1pRFUHhn1hxpGDvEirgOjlUf2mB2Ml0Em"
+    "Orden del Día Diciembre - Acta 197": "https://drive.google.com/drive/folders/1pRFUHhn1hxpGDvEirgOjlUf2mB2Ml0Em",
 }
+
+CVAR_NOMBRE = "Categorización CVar 2026"
 
 # =========================
 # RENDER
@@ -143,25 +190,32 @@ if _acta_focus:
     else:
         st.warning(f"El Acta {_acta_focus} todavía no tiene carpeta de Google Drive habilitada.")
 
+st.markdown('<div id="archivo-cvar"></div>', unsafe_allow_html=True)
+
 for nombre, link in actas.items():
     m_acta = re.search(r"Acta\s+(\d+)", nombre)
     n_acta = int(m_acta.group(1)) if m_acta else None
-    destacado = n_acta is not None and n_acta == _acta_focus
-    if destacado:
+    es_cvar = nombre == CVAR_NOMBRE
+    destacado = (n_acta is not None and n_acta == _acta_focus) or (es_cvar and not _acta_focus)
+    if destacado and n_acta is not None:
         _ancla_archivos = f"archivo-acta-{n_acta}"
+    elif destacado and es_cvar:
+        _ancla_archivos = "archivo-cvar"
 
     if "XXXXXXXX" in link:
         link_html = "<p class='no-link'>🔒 Carpeta aún no habilitada</p>"
     else:
         link_html = f'<p>🔗 <a href="{link}" target="_blank">Abrir carpeta</a></p>'
 
-    borde = "border:2px solid #064a3f;" if destacado else ""
+    borde = "border:2px solid #064a3f;" if (destacado and not es_cvar) else ""
+    clase = "card ucc-card-cvar" if es_cvar else "card"
     ancla = f'<div id="archivo-acta-{n_acta}"></div>' if n_acta else ""
+    titulo_extra = " · carga permanente" if es_cvar else ""
     st.markdown(
         f"""
         {ancla}
-        <div class="card" style="{borde}">
-        <h3>📁 {nombre}</h3>
+        <div class="{clase}" style="{borde}">
+        <h3>📁 {nombre}{titulo_extra}</h3>
         {link_html}
         <p><strong>Cómo cargar el archivo:</strong></p>
         <ol>
